@@ -74,7 +74,7 @@ class TabClawApp {
       currentPlan: null,
       currentPlanMessage: '',
       // Table modal state
-      tableModal: { tableId: null, page: 1, totalPages: 1 },
+      tableModal: { tableId: null, page: 1, totalPages: 1, htmlId: null },
       // Skill edit state
       skillEdit: null,
       // Memory edit state
@@ -87,6 +87,8 @@ class TabClawApp {
 
     this._streamMsgId = null; // DOM id of the message being streamed
     this._streamBuffer = '';  // accumulates text chunks
+    this._activeUploads = 0;
+    this._uploadIndicatorTimer = null;
 
     this._init();
   }
@@ -195,6 +197,10 @@ class TabClawApp {
       const tid = this.state.tableModal.tableId;
       if (tid) window.location.href = `/api/tables/${tid}/download`;
     });
+    document.getElementById('table-modal-html').addEventListener('click', () => {
+      const htmlId = this.state.tableModal.htmlId;
+      if (htmlId) window.location.href = `/api/html-docs/${htmlId}/download`;
+    });
 
     // Close modals on overlay click
     ['plan-modal', 'table-modal', 'skill-modal', 'memory-modal', 'demo-modal'].forEach(id => {
@@ -301,9 +307,9 @@ class TabClawApp {
       : 'Ask a question or give an instruction about your tables…';
     // Upload hints
     const uploadMain = document.getElementById('upload-hint-main');
-    if (uploadMain) uploadMain.textContent = zh ? '点击或拖拽 CSV / Excel 文件至此' : 'Click or drop CSV / Excel files';
+    if (uploadMain) uploadMain.textContent = zh ? '点击或拖拽 CSV / Excel / 图片文件至此' : 'Click or drop CSV / Excel / image files';
     const uploadSub = document.getElementById('upload-hint-sub');
-    if (uploadSub) uploadSub.textContent = zh ? '支持多文件同时上传' : 'Multiple files supported';
+    if (uploadSub) uploadSub.textContent = zh ? '支持 CSV、Excel、PNG、JPG、WEBP' : 'CSV, Excel, PNG, JPG, WEBP';
     // Lab credit
     const labCredit = document.getElementById('lab-credit');
     if (labCredit) labCredit.textContent = zh
@@ -337,20 +343,89 @@ class TabClawApp {
     } catch (e) { console.error('loadTables', e); }
   }
 
+  _isImageFile(file) {
+    return /\.(png|jpe?g|webp|bmp)$/i.test(file.name || '');
+  }
+
+  _sourceLabel(source) {
+    if (source === 'computed') return 'result';
+    if (source === 'image') return 'image';
+    if (source === 'demo') return 'demo';
+    return 'csv';
+  }
+
+  _setUploadIndicator(state, text = '') {
+    const area = document.getElementById('upload-area');
+    const status = document.getElementById('upload-status');
+    const statusText = document.getElementById('upload-status-text');
+    const spinner = status?.querySelector('.upload-spinner');
+    if (!area || !status || !statusText || !spinner) return;
+
+    clearTimeout(this._uploadIndicatorTimer);
+    area.classList.remove('busy', 'success', 'error');
+
+    if (!state) {
+      status.classList.add('hidden');
+      statusText.textContent = '';
+      spinner.style.display = '';
+      return;
+    }
+
+    area.classList.add(state);
+    status.classList.remove('hidden');
+    statusText.textContent = text;
+    spinner.style.display = state === 'busy' ? '' : 'none';
+  }
+
+  _beginUploadFeedback(fileName, isImage) {
+    this._activeUploads += 1;
+    const text = isImage
+      ? `Analyzing ${fileName} and converting it to HTML…`
+      : `Uploading ${fileName}…`;
+    this._setUploadIndicator('busy', text);
+  }
+
+  _endUploadFeedback(state, text, holdMs = 1800) {
+    this._activeUploads = Math.max(0, this._activeUploads - 1);
+    if (this._activeUploads > 0) {
+      this._setUploadIndicator('busy', `Processing ${this._activeUploads} more upload${this._activeUploads > 1 ? 's' : ''}…`);
+      return;
+    }
+    this._setUploadIndicator(state, text);
+    this._uploadIndicatorTimer = setTimeout(() => this._setUploadIndicator(null), holdMs);
+  }
+
   async _uploadFile(file) {
     const name = file.name;
+    const isImage = this._isImageFile(file);
+    this._beginUploadFeedback(name, isImage);
     this._notify(`Uploading ${name}…`, 'info');
     const formData = new FormData();
     formData.append('file', file);
     try {
-      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      const endpoint = isImage ? '/api/upload-image' : '/api/upload';
+      const res = await fetch(endpoint, { method: 'POST', body: formData });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       this.state.tables = await this._api('GET', '/api/tables');
       this._renderTables();
-      this._notify(`Uploaded: ${data.name} (${data.rows} rows × ${data.cols} cols)`, 'success');
+      if (isImage) {
+        const count = data.table_count || 0;
+        const label = count === 1 ? 'table' : 'tables';
+        this._notify(`Converted image to HTML and extracted ${count} ${label}`, 'success');
+        this._appendSystemMessage(`Image "${name}" was converted to HTML and extracted into ${count} table${count === 1 ? '' : 's'}.`);
+        this._endUploadFeedback('success', `Finished ${name}: HTML created and ${count} table${count === 1 ? '' : 's'} extracted.`);
+      } else {
+        this._notify(`Uploaded: ${data.name} (${data.rows} rows × ${data.cols} cols)`, 'success');
+        this._appendSystemMessage(`Table file "${name}" uploaded successfully.`);
+        this._endUploadFeedback('success', `Finished ${name}: table imported successfully.`);
+      }
       this._hideChatEmpty();
-    } catch (e) { this._notify(`Upload failed: ${e.message}`, 'error'); }
+    } catch (e) {
+      this._notify(`Upload failed: ${e.message}`, 'error');
+      this._appendSystemMessage(`✗ Upload failed for "${name}": ${e.message}`);
+      this._endUploadFeedback('error', `Failed ${name}: upload or conversion did not complete.`, 2600);
+    }
   }
 
   async _deleteTable(tableId) {
@@ -367,7 +442,7 @@ class TabClawApp {
     const count = document.getElementById('table-count');
     count.textContent = this.state.tables.length;
     if (!this.state.tables.length) {
-      list.innerHTML = '<div class="empty-state">No tables yet.<br>Upload CSV or Excel files below.</div>';
+      list.innerHTML = '<div class="empty-state">No tables yet.<br>Upload CSV, Excel, or table images below.</div>';
       return;
     }
     list.innerHTML = this.state.tables.map(t => `
@@ -377,7 +452,7 @@ class TabClawApp {
           <div class="table-item-name">${this._esc(t.name)}</div>
           <div class="table-item-meta">${t.rows.toLocaleString()} rows × ${t.cols} cols</div>
         </div>
-        <span class="table-item-badge ${t.source === 'computed' ? 'purple' : ''}">${t.source === 'computed' ? 'result' : 'csv'}</span>
+        <span class="table-item-badge ${t.source === 'computed' ? 'purple' : ''}">${this._sourceLabel(t.source)}</span>
         <div class="table-item-actions">
           <button class="btn icon-only sm" title="View" onclick="app.showTableModal('${t.table_id}')">👁</button>
           <button class="btn icon-only sm danger" title="Delete" onclick="app._deleteTable('${t.table_id}')">🗑</button>
@@ -392,7 +467,7 @@ class TabClawApp {
   // -----------------------------------------------------------------------
 
   async showTableModal(tableId, page = 1) {
-    this.state.tableModal = { tableId, page, totalPages: 1 };
+    this.state.tableModal = { tableId, page, totalPages: 1, htmlId: null };
     document.getElementById('table-modal').classList.remove('hidden');
     await this._loadTablePage(tableId, page);
   }
@@ -408,14 +483,17 @@ class TabClawApp {
       const data = await this._api('GET', `/api/tables/${tableId}?page=${page}&page_size=50`);
       this.state.tableModal.totalPages = data.total_pages;
       this.state.tableModal.page = data.page;
+      this.state.tableModal.htmlId = data.html_id || null;
       document.getElementById('table-modal-title').textContent = data.name;
       document.getElementById('table-modal-meta').textContent =
-        `${data.total_rows.toLocaleString()} rows × ${data.columns.length} columns`;
+        `${data.total_rows.toLocaleString()} rows × ${data.columns.length} columns · ${this._sourceLabel(data.source)}`;
       document.getElementById('table-modal-page').textContent =
         `Page ${data.page} / ${data.total_pages}`;
       document.getElementById('table-modal-prev').disabled = data.page <= 1;
       document.getElementById('table-modal-next').disabled = data.page >= data.total_pages;
-      content.innerHTML = this._buildDataTable(data.columns, data.rows, data.total_rows);
+      const htmlBtn = document.getElementById('table-modal-html');
+      if (htmlBtn) htmlBtn.style.display = data.html_id ? 'inline-flex' : 'none';
+      content.innerHTML = this._buildDataTable(data.columns, data.rows, data.total_rows, 0, tableId);
     } catch (e) {
       content.innerHTML = `<div style="padding:20px;color:var(--red)">${e.message}</div>`;
     }
@@ -427,7 +505,7 @@ class TabClawApp {
     if (newPage !== page) await this._loadTablePage(tableId, newPage);
   }
 
-  _buildDataTable(columns, rows, totalRows, maxInline = 0) {
+  _buildDataTable(columns, rows, totalRows, maxInline = 0, tableId = null) {
     const limit = maxInline || rows.length;
     const shown = rows.slice(0, limit);
     const extra = rows.length > limit ? rows.length - limit : 0;
@@ -437,8 +515,8 @@ class TabClawApp {
     ).join('');
     let html = `<div class="table-scroll"><table class="data-table"><thead><tr>${headers}</tr></thead><tbody>${bodyRows}</tbody></table></div>`;
     if (extra > 0) html += `<div class="table-more-rows">… ${extra} more rows (showing ${shown.length} of ${rows.length})</div>`;
-    if (maxInline > 0 && totalRows > maxInline) {
-      html += `<div class="table-more-rows">${totalRows.toLocaleString()} total rows — <a style="color:var(--primary);cursor:pointer" onclick="app.showTableModal('_tid_')">View full table</a></div>`;
+    if (maxInline > 0 && totalRows > maxInline && tableId) {
+      html += `<div class="table-more-rows">${totalRows.toLocaleString()} total rows — <a style="color:var(--primary);cursor:pointer" onclick="app.showTableModal('${tableId}')">View full table</a></div>`;
     }
     return html;
   }
@@ -892,8 +970,13 @@ class TabClawApp {
     const div = document.createElement('div');
     div.className = 'table-result';
     const totalRows = tableData.total_rows || tableData.rows.length;
-    const shown = Math.min(tableData.rows.length, 20);
-    const tableHtml = this._buildDataTable(tableData.columns, tableData.rows, totalRows, 20);
+    const tableHtml = this._buildDataTable(
+      tableData.columns,
+      tableData.rows,
+      totalRows,
+      20,
+      tableData.table_id,
+    );
     div.innerHTML = `
       <div class="table-result-header">
         <span class="table-result-name">📊 ${this._esc(tableData.name)}</span>
@@ -1105,7 +1188,7 @@ class TabClawApp {
       this._chatContainer().innerHTML = `
         <div id="chat-empty">
           <div class="brand-logo-wrap"><img src="/asset/logo_rmbg.png" class="brand-logo" /></div>
-          <p>Upload tables from the sidebar, then ask questions or request operations on your data.</p>
+          <p>Upload tables or table screenshots from the sidebar, then ask questions or request operations on your data.</p>
           <div class="suggestion-chips">
             <div class="chip" onclick="app.insertSuggestion(this)">Summarize all uploaded tables</div>
             <div class="chip" onclick="app.insertSuggestion(this)">Find rows where value is null</div>

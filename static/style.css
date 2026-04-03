@@ -250,6 +250,8 @@ html.light .header-logo {
   color: var(--text-muted);
   font-size: 12px;
   transition: border-color 0.15s, color 0.15s, background 0.15s;
+  position: relative;
+  overflow: hidden;
 }
 .upload-area:hover, .upload-area.drag-over {
   border-color: var(--primary);
@@ -257,6 +259,62 @@ html.light .header-logo {
   background: var(--primary-dark)11;
 }
 .upload-area svg { display: block; margin: 0 auto 6px; }
+.upload-area.busy {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: linear-gradient(135deg, var(--primary-dark)18, transparent 65%);
+}
+.upload-area.busy::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent 0%, rgba(138, 180, 248, 0.12) 45%, transparent 100%);
+  transform: translateX(-100%);
+  animation: uploadSweep 1.6s linear infinite;
+  pointer-events: none;
+}
+.upload-area.busy svg {
+  animation: uploadFloat 1.1s ease-in-out infinite alternate;
+}
+.upload-area.success {
+  border-color: var(--green);
+  color: var(--green);
+  background: #1a4d231a;
+}
+.upload-area.error {
+  border-color: var(--red);
+  color: var(--red);
+  background: #4d1a1a1a;
+}
+.upload-status {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.upload-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: uploadSpin 0.85s linear infinite;
+}
+@keyframes uploadSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes uploadFloat {
+  from { transform: translateY(-1px); }
+  to { transform: translateY(2px); }
+}
+@keyframes uploadSweep {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(120%); }
+}
 
 /* ---------- Skills panel ---------- */
 .skill-section-title {

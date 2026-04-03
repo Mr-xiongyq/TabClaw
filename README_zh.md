@@ -1,4 +1,4 @@
-<h1 align="center"> TabClaw：交互式表格分析 AI 智能体 </h1>
+<h1 align="center"> TabClaw Vision HTML：支持图片转 HTML 的表格分析 AI 智能体 </h1>
 
 <p align="center">
   <a href="README.md">English</a> · <strong>中文</strong>
@@ -19,7 +19,7 @@
 
 
 
-拖入一张 CSV 或 Excel，用自然语言说出你想要什么——TabClaw 会先展示执行计划，再并行调度多个智能体处理你的表格，跨会话记住你的偏好，并从每次交互中提炼可复用技能。用得越多，它就越懂你。
+拖入一张 CSV、Excel，或者一张表格截图/图片，用自然语言说出你想要什么——TabClaw Vision HTML 会先用多模态模型把图片转成 HTML，再抽取成结构化表格，随后沿用原有的计划、推理、多智能体分析、记忆与技能学习链路继续处理。用得越多，它就越懂你。
 
 ---
 
@@ -79,16 +79,17 @@ TabClaw 会捕捉你的工作偏好——常用指标、输出格式、领域术
 
 ```bash
 git clone https://github.com/fishsure/TabClaw.git
-cd TabClaw
+cd TabClawVisionHTML
 
 cp setting.txt.example setting.txt
-# 在 setting.txt 中填写 API_KEY 与 BASE_URL
+# 在 setting.txt 中填写 API_KEY、BASE_URL
+# 若要上传图片，请确保 VISION_MODEL 是支持视觉输入的模型
 
 pip install -r requirements.txt
 bash run.sh
 ```
 
-浏览器打开 **http://localhost:8000**，点击 **一键体验** 即可进入引导式演示场景。
+浏览器打开 **http://localhost:8000**。你可以直接上传 CSV / Excel，也可以上传 PNG / JPG / WEBP 表格图片，系统会先转成 HTML 再进入后续推理。
 
 <p align="center"><img src="asset/try.png" alt="演示场景" width="75%" /></p>
 

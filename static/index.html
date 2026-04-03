@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TabClaw — Table Intelligence Agent</title>
+  <title>TabClaw Vision HTML</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -63,10 +63,14 @@
           <polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/>
           <path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/>
         </svg>
-        <span id="upload-hint-main">Click or drop CSV / Excel files</span><br>
-        <span id="upload-hint-sub" style="font-size:10px;color:var(--text-dim)">Multiple files supported</span>
+        <span id="upload-hint-main">Click or drop CSV / Excel / image files</span><br>
+        <span id="upload-hint-sub" style="font-size:10px;color:var(--text-dim)">CSV, Excel, PNG, JPG, WEBP</span>
+        <div class="upload-status hidden" id="upload-status">
+          <span class="upload-spinner"></span>
+          <span id="upload-status-text">Uploading…</span>
+        </div>
       </div>
-      <input type="file" id="file-input" accept=".csv,.xlsx,.xls" multiple style="display:none" />
+      <input type="file" id="file-input" accept=".csv,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.bmp" multiple style="display:none" />
     </div>
 
     <!-- Skills panel -->
@@ -113,7 +117,7 @@
         <div class="brand-logo-wrap">
           <img src="/asset/logo_rmbg.png" alt="TabClaw" class="brand-logo" />
         </div>
-        <p>Upload tables from the sidebar, then ask questions or request operations on your data.</p>
+          <p>Upload tables or table screenshots from the sidebar, then ask questions or request operations on your data.</p>
         <div class="suggestion-chips">
           <div class="chip" onclick="app.insertSuggestion(this)">Summarize all uploaded tables</div>
           <div class="chip" onclick="app.insertSuggestion(this)">Find rows where value is null</div>
@@ -212,6 +216,7 @@
         <button class="btn sm" id="table-modal-prev">‹ Prev</button>
         <span id="table-modal-page" style="font-size:12px;color:var(--text-muted)">Page 1</span>
         <button class="btn sm" id="table-modal-next">Next ›</button>
+        <button class="btn sm" id="table-modal-html" style="display:none">⬇ HTML</button>
         <button class="btn sm primary" id="table-modal-download">⬇ CSV</button>
         <button class="modal-close" onclick="app.hideTableModal()">×</button>
       </div>

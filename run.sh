@@ -2,11 +2,11 @@
 set -e
 cd "$(dirname "$0")"
 
-echo "=== TabClaw Startup ==="
+echo "=== TabClaw Vision HTML Startup ==="
 
 # Install dependencies
 echo "Installing Python dependencies..."
-pip3 install -q fastapi "uvicorn[standard]" python-multipart aiofiles
+pip3 install -q -r requirements.txt
 
 echo "Starting TabClaw server..."
 echo "Open http://localhost:8000 in your browser"

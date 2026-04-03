@@ -11,7 +11,14 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from config import API_KEY, BASE_URL, DEFAULT_MODEL, DEFAULT_MODEL_EXTRA_PARAMS
+from config import (
+    API_KEY,
+    BASE_URL,
+    DEFAULT_MODEL,
+    DEFAULT_MODEL_EXTRA_PARAMS,
+    VISION_MODEL,
+    VISION_MODEL_EXTRA_PARAMS,
+)
 from agent.llm import LLMClient
 from agent.executor import AgentExecutor
 from agent.planner import Planner
@@ -23,9 +30,16 @@ from skills.registry import SkillRegistry
 # App & component setup
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="TabClaw", version="0.1.0")
+app = FastAPI(title="TabClaw Vision HTML", version="0.2.0")
 
-llm = LLMClient(api_key=API_KEY, base_url=BASE_URL, model=DEFAULT_MODEL, model_extra_params=DEFAULT_MODEL_EXTRA_PARAMS)
+llm = LLMClient(
+    api_key=API_KEY,
+    base_url=BASE_URL,
+    model=DEFAULT_MODEL,
+    model_extra_params=DEFAULT_MODEL_EXTRA_PARAMS,
+    vision_model=VISION_MODEL,
+    vision_model_extra_params=VISION_MODEL_EXTRA_PARAMS,
+)
 skill_registry = SkillRegistry()
 memory_manager = MemoryManager()
 executor = AgentExecutor(llm, skill_registry, memory_manager)
@@ -34,6 +48,7 @@ planner = Planner(llm, memory_manager)
 
 # Global state (single-user local app)
 tables: Dict[str, Dict] = {}          # table_id -> {name, df, source, filename}
+html_docs: Dict[str, Dict] = {}       # html_id -> {name, filename, html, table_ids}
 chat_history: List[Dict] = []
 
 AUTO_COMPACT_THRESHOLD = 20   # messages before auto-compaction kicks in
@@ -48,6 +63,66 @@ app.mount("/asset", StaticFiles(directory=str(ASSET_DIR)), name="asset")
 @app.get("/")
 async def root():
     return FileResponse(str(STATIC_DIR / "index.html"))
+
+
+def _base_name(filename: str, fallback: str) -> str:
+    if not filename:
+        return fallback
+    if "." not in filename:
+        return filename
+    return filename.rsplit(".", 1)[0]
+
+
+def _stringify_column_name(col: Any) -> str:
+    """Flatten complex column labels (e.g. MultiIndex tuples) into plain strings."""
+    if isinstance(col, tuple):
+        parts = []
+        for item in col:
+            text = str(item).strip()
+            if not text or text.lower().startswith("unnamed:"):
+                continue
+            parts.append(text)
+        if parts:
+            return " | ".join(parts)
+        return "column"
+    return str(col)
+
+
+def _normalise_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure DataFrame columns are plain unique strings for JSON/UI compatibility."""
+    normalised = df.copy()
+    seen: Dict[str, int] = {}
+    new_columns = []
+    for raw_col in normalised.columns:
+        base = _stringify_column_name(raw_col).strip() or "column"
+        count = seen.get(base, 0)
+        seen[base] = count + 1
+        new_columns.append(base if count == 0 else f"{base}_{count + 1}")
+    normalised.columns = new_columns
+    return normalised
+
+
+def _table_payload(table_id: str, table_entry: Dict) -> Dict:
+    df = table_entry["df"]
+    return {
+        "table_id": table_id,
+        "name": table_entry["name"],
+        "rows": len(df),
+        "cols": len(df.columns),
+        "columns": df.columns.tolist(),
+        "source": table_entry.get("source", "unknown"),
+        "html_id": table_entry.get("html_id"),
+    }
+
+
+def _parse_tables_from_html(html: str) -> List[pd.DataFrame]:
+    cleaned = html.strip()
+    if not cleaned:
+        return []
+    try:
+        return pd.read_html(io.StringIO(cleaned))
+    except ValueError:
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +145,7 @@ async def upload_table(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(400, f"Failed to parse file: {e}")
 
+    df = _normalise_dataframe_columns(df)
     table_id = uuid.uuid4().hex[:8]
     name = fname.rsplit(".", 1)[0]
     tables[table_id] = {"name": name, "df": df, "source": "uploaded", "filename": fname}
@@ -85,20 +161,74 @@ async def upload_table(file: UploadFile = File(...)):
     }
 
 
-@app.get("/api/tables")
-async def list_tables():
-    result = []
-    for tid, t in tables.items():
-        df = t["df"]
-        result.append({
-            "table_id": tid,
-            "name": t["name"],
+@app.post("/api/upload-image")
+async def upload_image(file: UploadFile = File(...)):
+    content = await file.read()
+    fname = file.filename or "image"
+    lower = fname.lower()
+    if not lower.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")):
+        raise HTTPException(400, "Only image files (.png/.jpg/.jpeg/.webp/.bmp) are supported")
+
+    try:
+        html = await llm.image_to_html(content, fname)
+    except Exception as e:
+        raise HTTPException(400, f"Failed to convert image to HTML: {e}")
+
+    dfs = _parse_tables_from_html(html)
+    if not dfs:
+        raise HTTPException(
+            400,
+            "The model returned HTML, but no <table> could be parsed from it. "
+            "Use a clearer table image or a vision-capable model.",
+        )
+
+    base_name = _base_name(fname, "image_table")
+    html_id = uuid.uuid4().hex[:8]
+    created = []
+    table_ids = []
+
+    for idx, df in enumerate(dfs, start=1):
+        df = _normalise_dataframe_columns(df)
+        table_id = uuid.uuid4().hex[:8]
+        table_name = base_name if len(dfs) == 1 else f"{base_name}_table_{idx}"
+        tables[table_id] = {
+            "name": table_name,
+            "df": df,
+            "source": "image",
+            "filename": fname,
+            "html_id": html_id,
+        }
+        created.append({
+            "table_id": table_id,
+            "name": table_name,
             "rows": len(df),
             "cols": len(df.columns),
             "columns": df.columns.tolist(),
-            "source": t.get("source", "unknown"),
+            "preview": df.head(5).fillna("").to_dict("records"),
         })
-    return result
+        table_ids.append(table_id)
+
+    html_docs[html_id] = {
+        "html_id": html_id,
+        "name": base_name,
+        "filename": fname,
+        "source": "image",
+        "html": html,
+        "table_ids": table_ids,
+    }
+
+    return {
+        "html_id": html_id,
+        "name": base_name,
+        "html_preview": html[:1200],
+        "table_count": len(created),
+        "tables": created,
+    }
+
+
+@app.get("/api/tables")
+async def list_tables():
+    return [_table_payload(tid, t) for tid, t in tables.items()]
 
 
 @app.get("/api/tables/{table_id}")
@@ -112,6 +242,8 @@ async def get_table(table_id: str, page: int = 1, page_size: int = 50):
     return {
         "table_id": table_id,
         "name": tables[table_id]["name"],
+        "source": tables[table_id].get("source", "unknown"),
+        "html_id": tables[table_id].get("html_id"),
         "total_rows": total,
         "page": page,
         "page_size": page_size,
@@ -141,6 +273,48 @@ async def download_table(table_id: str):
         iter([csv]),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{name}.csv"'},
+    )
+
+
+@app.get("/api/html-docs")
+async def list_html_docs():
+    result = []
+    for doc_id, doc in html_docs.items():
+        result.append({
+            "html_id": doc_id,
+            "name": doc["name"],
+            "filename": doc["filename"],
+            "table_ids": doc["table_ids"],
+            "table_count": len(doc["table_ids"]),
+        })
+    return result
+
+
+@app.get("/api/html-docs/{html_id}")
+async def get_html_doc(html_id: str):
+    if html_id not in html_docs:
+        raise HTTPException(404, "HTML document not found")
+    doc = html_docs[html_id]
+    return {
+        "html_id": html_id,
+        "name": doc["name"],
+        "filename": doc["filename"],
+        "table_ids": doc["table_ids"],
+        "html": doc["html"],
+    }
+
+
+@app.get("/api/html-docs/{html_id}/download")
+async def download_html_doc(html_id: str):
+    if html_id not in html_docs:
+        raise HTTPException(404, "HTML document not found")
+    doc = html_docs[html_id]
+    html = doc["html"]
+    filename = f"{doc['name']}.html"
+    return StreamingResponse(
+        iter([html]),
+        media_type="text/html",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -472,6 +646,7 @@ async def demo_load(body: DemoLoadBody):
     """Load example CSV files from the examples/ directory into the table store."""
     if body.clear:
         tables.clear()
+        html_docs.clear()
         chat_history.clear()
     loaded = []
     for filename in body.files:
